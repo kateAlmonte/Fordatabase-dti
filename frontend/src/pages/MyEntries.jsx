@@ -81,6 +81,7 @@ export default function MyEntries({
   onDeleteEntry,
   onShowToast,
   submissionWindow,
+  isLoading = false,
 }) {
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -132,23 +133,31 @@ export default function MyEntries({
     setYearFilter("all");
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
 
     const entryTitle = deleteTarget.titleOfActivities;
+    try {
+      await onDeleteEntry?.(deleteTarget.id);
+      onShowToast?.({
+        title: "Entry deleted",
+        description: `${entryTitle} was removed from your entries.`,
+        type: "success",
+      });
 
-    onDeleteEntry?.(deleteTarget.id);
-    onShowToast?.({
-      title: "Entry deleted",
-      description: `${entryTitle} was removed from your entries.`,
-      type: "success",
-    });
+      if (selectedEntry?.id === deleteTarget.id) {
+        setSelectedEntry(null);
+      }
 
-    if (selectedEntry?.id === deleteTarget.id) {
-      setSelectedEntry(null);
+      setDeleteTarget(null);
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to delete entry",
+        description:
+          error?.message || "The entry could not be deleted. Please try again.",
+        type: "error",
+      });
     }
-
-    setDeleteTarget(null);
   };
 
   return (
@@ -250,7 +259,11 @@ export default function MyEntries({
         </CardHeader>
 
         <CardContent className="p-0">
-          {filteredEntries.length === 0 ? (
+          {isLoading ? (
+            <div className="p-6 text-sm text-slate-500">
+              Loading your entries...
+            </div>
+          ) : filteredEntries.length === 0 ? (
             <div className="p-6 text-sm text-slate-500">
               No entries match the current filters.
             </div>

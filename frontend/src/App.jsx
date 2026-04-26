@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/layout/AppLayout";
 import initialTemplateData from "./data/awpb_dropdown_tree.json";
+import { authService, entriesService, submissionService } from "./services/supabaseService";
 
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -50,6 +51,7 @@ function App() {
   });
 
   const [authUser, setAuthUser] = useState(null);
+  const [isEntriesLoading, setIsEntriesLoading] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimeoutRef = useRef(null);
   const toastDismissRef = useRef(null);
@@ -63,22 +65,47 @@ function App() {
   }, [authUser?.id, entries]);
 
   const handleLogin = (user) => {
-    const matchedAccount = accounts.find(
-      (account) => account.username === user.username,
-    );
-
-    if (!matchedAccount) return;
-
     setAuthUser({
-      id: matchedAccount.id,
-      username: matchedAccount.username,
-      role: matchedAccount.role,
-      fullName: matchedAccount.fullName || matchedAccount.username,
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      fullName: user.fullName || user.username,
+    });
+
+    setAccounts((prev) => {
+      const existingIndex = prev.findIndex((account) => account.username === user.username);
+      const nextAccount = {
+        id: user.id,
+        username: user.username,
+        fullName: user.fullName || user.username,
+        email: user.email || "",
+        role: user.role,
+        status: user.status || "active",
+      };
+
+      if (existingIndex === -1) {
+        return [nextAccount, ...prev];
+      }
+
+      return prev.map((account, index) =>
+        index === existingIndex ? { ...account, ...nextAccount } : account,
+      );
     });
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await authService.signOut();
+    } catch (error) {
+      showToast({
+        title: "Logout issue",
+        description: error?.message || "The session could not be cleared cleanly.",
+        type: "error",
+      });
+    }
+
     setAuthUser(null);
+    setEntries([]);
     setEntryBeingEdited(null);
     setSubmitEntryDraft(null);
   };
@@ -116,15 +143,44 @@ function App() {
     setEntries((prev) => [newEntry, ...prev]);
   };
 
-  const handleUpdateEntry = (entryId, updates) => {
+  const handleUpdateEntry = async (entryId, updates) => {
+    const databaseUpdates = {};
+
+    if (updates.status !== undefined) {
+      databaseUpdates.status = updates.status;
+    }
+    if (updates.adminComment !== undefined) {
+      databaseUpdates.reviewer_notes = updates.adminComment || null;
+    }
+    if (updates.reviewedAt !== undefined) {
+      databaseUpdates.review_date = updates.reviewedAt || null;
+    }
+    if (updates.reviewedAt !== undefined && authUser?.id) {
+      databaseUpdates.reviewer_id = authUser.id;
+    }
+
+    if (updates.status === "Pending Review") {
+      databaseUpdates.reviewer_notes = null;
+      databaseUpdates.review_date = null;
+      databaseUpdates.reviewer_id = null;
+    }
+
+    const updatedEntry =
+      Object.keys(databaseUpdates).length > 0
+        ? await entriesService.update(entryId, databaseUpdates)
+        : null;
+
     setEntries((prev) =>
       prev.map((entry) =>
-        entry.id === entryId ? { ...entry, ...updates } : entry,
+        entry.id === entryId ? { ...(updatedEntry || entry), ...updates } : entry,
       ),
     );
+
+    return updatedEntry;
   };
 
-  const handleDeleteEntry = (entryId) => {
+  const handleDeleteEntry = async (entryId) => {
+    await entriesService.delete(entryId);
     setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
   };
 
@@ -164,8 +220,9 @@ function App() {
 
     const matchedAccount = accounts.find((account) => account.id === authUser.id);
 
-    if (!matchedAccount || matchedAccount.status !== "active") {
+    if (matchedAccount && matchedAccount.status !== "active") {
       setAuthUser(null);
+      setEntries([]);
       setEntryBeingEdited(null);
       setSubmitEntryDraft(null);
       return;
@@ -174,12 +231,12 @@ function App() {
     setAuthUser((prev) => {
       if (!prev) return prev;
 
-      const nextUser = {
+      const nextUser = matchedAccount ? {
         ...prev,
         username: matchedAccount.username,
         role: matchedAccount.role,
         fullName: matchedAccount.fullName || matchedAccount.username,
-      };
+      } : prev;
 
       if (
         prev.username === nextUser.username &&
@@ -192,6 +249,84 @@ function App() {
       return nextUser;
     });
   }, [accounts, authUser?.id]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      try {
+        const user = await authService.getCurrentUser();
+        if (!user) return;
+
+        const profile = await authService.getProfile(user.id);
+        if (!isMounted || !profile) return;
+
+        handleLogin({
+          id: user.id,
+          username: profile.username,
+          email: profile.email,
+          fullName: profile.full_name,
+          role: profile.role,
+          status: profile.status,
+        });
+      } catch {
+        // Ignore silent restore failures and let the user sign in manually.
+      }
+    };
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authUser?.id) return undefined;
+
+    let isMounted = true;
+
+    const hydrateAppData = async () => {
+      setIsEntriesLoading(true);
+      try {
+        const [loadedEntries, activeWindow] = await Promise.all([
+          entriesService.getAll(),
+          submissionService.getActiveWindow().catch(() => null),
+        ]);
+
+        if (!isMounted) return;
+
+        setEntries(loadedEntries);
+
+        if (activeWindow?.start_date && activeWindow?.end_date) {
+          setSubmissionWindow({
+            startDate: activeWindow.start_date,
+            endDate: activeWindow.end_date,
+          });
+        }
+      } catch (error) {
+        if (!isMounted) return;
+
+        showToast({
+          title: "Unable to load entries",
+          description:
+            error?.message ||
+            "The app could not load your latest Supabase data.",
+          type: "error",
+        });
+      } finally {
+        if (isMounted) {
+          setIsEntriesLoading(false);
+        }
+      }
+    };
+
+    hydrateAppData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authUser?.id]);
 
   useEffect(() => {
     return () => {
@@ -282,6 +417,7 @@ function App() {
               <Home
                 entries={encoderEntries}
                 submissionWindow={submissionWindow}
+                isLoading={isEntriesLoading}
               />
             ) : (
               <Navigate to="/admin/dashboard" replace />
@@ -299,6 +435,7 @@ function App() {
                 onDeleteEntry={handleDeleteEntry}
                 onShowToast={showToast}
                 submissionWindow={submissionWindow}
+                isLoading={isEntriesLoading}
               />
             ) : (
               <Navigate to="/admin/dashboard" replace />
@@ -321,6 +458,7 @@ function App() {
                 onClearDraft={clearSubmitEntryDraft}
                 currentUser={authUser}
                 templateData={templateData}
+                onShowToast={showToast}
               />
             ) : (
               <Navigate to="/admin/dashboard" replace />
@@ -352,6 +490,7 @@ function App() {
                 entries={entries}
                 submissionWindow={submissionWindow}
                 onUpdateSubmissionWindow={setSubmissionWindow}
+                isLoading={isEntriesLoading}
               />
             ) : (
               <Navigate to="/" replace />
@@ -369,6 +508,7 @@ function App() {
                 onDeleteEntry={handleDeleteEntry}
                 submissionWindow={submissionWindow}
                 onShowToast={showToast}
+                isLoading={isEntriesLoading}
               />
             ) : (
               <Navigate to="/" replace />

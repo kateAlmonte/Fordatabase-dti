@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from '../lib/supabase';
+import { entriesService, entryReferenceService } from "../services/supabaseService";
 
 const FALLBACK_VALUE = "N/A";
 
@@ -124,9 +124,11 @@ export default function SubmitEntry({
   onClearDraft,
   currentUser,
   templateData,
+  onShowToast,
 }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
     control,
@@ -443,7 +445,7 @@ export default function SubmitEntry({
     }
   };
 
-  const onSubmit = (data) => {
+  const onSubmit = async (data) => {
     if (!windowOpen) {
       alert(
         "The encoding period is closed. You cannot submit or resubmit entries right now.",
@@ -460,13 +462,105 @@ export default function SubmitEntry({
     }
 
     if (isEditingReturnedEntry) {
-      const updatedEntry = {
-        ...entryToEdit,
-        ownerId: entryToEdit.ownerId || currentUser?.id || "",
-        ownerUsername: entryToEdit.ownerUsername || currentUser?.username || "",
-        ownerFullName:
-          entryToEdit.ownerFullName || currentUser?.fullName || "",
-        planningYear: data.planningYear,
+      setIsSubmitting(true);
+      try {
+        const referenceIds = await entryReferenceService.resolveIds({
+          unit: data.unit,
+          component: data.component,
+          subComponent: data.subComponent,
+          keyActivity: data.keyActivity,
+          no: data.no,
+          performanceIndicator: data.performanceIndicator,
+          subActivity: data.subActivity,
+        });
+
+        await entriesService.update(entryToEdit.id, {
+          unit_id: referenceIds.unitId,
+          planning_year: Number(data.planningYear),
+          component_id: referenceIds.componentId,
+          sub_component_id: referenceIds.subComponentId,
+          key_activity_id: referenceIds.keyActivityId,
+          sub_activity_id: referenceIds.subActivityId,
+          title_of_activities: data.titleOfActivities,
+          unit_cost: toNumber(data.unitCost),
+          status: "Pending Review",
+          reviewer_id: null,
+          reviewer_notes: null,
+          review_date: null,
+          submission_date: new Date().toISOString(),
+        });
+
+        await entriesService.updateMonthlyTargets(
+          entryToEdit.id,
+          MONTHS.reduce((acc, month) => {
+            acc[month.key] = toNumber(targets[month.key]);
+            return acc;
+          }, {}),
+        );
+
+        const updatedEntry = {
+          ...entryToEdit,
+          unit_id: referenceIds.unitId,
+          component_id: referenceIds.componentId,
+          sub_component_id: referenceIds.subComponentId,
+          key_activity_id: referenceIds.keyActivityId,
+          sub_activity_id: referenceIds.subActivityId,
+          ownerId: entryToEdit.ownerId || currentUser?.id || "",
+          ownerUsername: entryToEdit.ownerUsername || currentUser?.username || "",
+          ownerFullName:
+            entryToEdit.ownerFullName || currentUser?.fullName || "",
+          planningYear: data.planningYear,
+          unit: data.unit,
+          component: data.component,
+          subComponent: data.subComponent,
+          keyActivity: data.keyActivity,
+          no: data.no,
+          performanceIndicator: data.performanceIndicator,
+          subActivity: data.subActivity,
+          titleOfActivities: data.titleOfActivities,
+          unitCost: toNumber(data.unitCost),
+          monthlyBreakdown: monthlyRows.map((row) => ({
+            month: row.label,
+            target: row.target,
+            amount: row.amount,
+          })),
+          grandTotal,
+          status: "Pending Review",
+          adminComment: "",
+          reviewedAt: "",
+          submittedAt: new Date().toISOString(),
+          resubmittedAt: new Date().toISOString(),
+        };
+
+        onSaveEditedEntry(entryToEdit.id, updatedEntry);
+        onShowToast?.({
+          title: "Entry resubmitted",
+          description: "Your returned entry was updated and sent back for review.",
+          type: "success",
+        });
+
+        reset(defaultFormValues);
+        setStep(1);
+        onClearDraft?.();
+        clearEditingEntry?.();
+        navigate("/entries");
+      } catch (error) {
+        onShowToast?.({
+          title: "Unable to save changes",
+          description:
+            error?.message ||
+            "The entry could not be updated. Please check the connection and try again.",
+          type: "error",
+        });
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const referenceIds = await entryReferenceService.resolveIds({
         unit: data.unit,
         component: data.component,
         subComponent: data.subComponent,
@@ -474,64 +568,57 @@ export default function SubmitEntry({
         no: data.no,
         performanceIndicator: data.performanceIndicator,
         subActivity: data.subActivity,
-        titleOfActivities: data.titleOfActivities,
-        unitCost: toNumber(data.unitCost),
-        monthlyBreakdown: monthlyRows.map((row) => ({
-          month: row.label,
-          target: row.target,
-          amount: row.amount,
-        })),
-        grandTotal,
-        status: "Pending Review",
-        adminComment: "",
-        reviewedAt: "",
-        resubmittedAt: new Date().toISOString(),
-      };
+      });
 
-      onSaveEditedEntry(entryToEdit.id, updatedEntry);
+      const createdEntry = await entriesService.create({
+        unit_id: referenceIds.unitId,
+        planning_year: Number(data.planningYear),
+        component_id: referenceIds.componentId,
+        sub_component_id: referenceIds.subComponentId,
+        key_activity_id: referenceIds.keyActivityId,
+        sub_activity_id: referenceIds.subActivityId,
+        title_of_activities: data.titleOfActivities,
+        unit_cost: toNumber(data.unitCost),
+        status: "Pending Review",
+        submission_date: new Date().toISOString(),
+      });
+
+      const savedEntry = await entriesService.updateMonthlyTargets(
+        createdEntry.id,
+        MONTHS.reduce((acc, month) => {
+          acc[month.key] = toNumber(targets[month.key]);
+          return acc;
+        }, {}),
+      );
+
+      onAddEntry({
+        ...savedEntry,
+        ownerId: savedEntry.ownerId || currentUser?.id || "",
+        ownerUsername: savedEntry.ownerUsername || currentUser?.username || "",
+        ownerFullName: savedEntry.ownerFullName || currentUser?.fullName || "",
+      });
+      onShowToast?.({
+        title: "Entry submitted",
+        description: "Your new entry was saved and sent for admin review.",
+        type: "success",
+      });
+
       reset(defaultFormValues);
       setStep(1);
       onClearDraft?.();
       clearEditingEntry?.();
       navigate("/entries");
-      return;
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to submit entry",
+        description:
+          error?.message ||
+          "The entry could not be created. Please check the connection and try again.",
+        type: "error",
+      });
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const newEntry = {
-      id:
-        typeof crypto !== "undefined" && crypto.randomUUID
-          ? crypto.randomUUID()
-          : String(Date.now()),
-      ownerId: currentUser?.id || "",
-      ownerUsername: currentUser?.username || "",
-      ownerFullName: currentUser?.fullName || "",
-      planningYear: data.planningYear,
-      unit: data.unit,
-      component: data.component,
-      subComponent: data.subComponent,
-      keyActivity: data.keyActivity,
-      no: data.no,
-      performanceIndicator: data.performanceIndicator,
-      subActivity: data.subActivity,
-      titleOfActivities: data.titleOfActivities,
-      unitCost: toNumber(data.unitCost),
-      monthlyBreakdown: monthlyRows.map((row) => ({
-        month: row.label,
-        target: row.target,
-        amount: row.amount,
-      })),
-      grandTotal,
-      status: "Pending Review",
-      adminComment: "",
-      submittedAt: new Date().toISOString(),
-    };
-
-    onAddEntry(newEntry);
-    reset(defaultFormValues);
-    setStep(1);
-    onClearDraft?.();
-    clearEditingEntry?.();
-    navigate("/entries");
   };
 
   const steps = [
@@ -1170,16 +1257,18 @@ export default function SubmitEntry({
 
                 <Button
                   type="submit"
-                  disabled={!windowOpen}
+                  disabled={!windowOpen || isSubmitting}
                   className={`px-4 text-[15px] border-0 ${
-                    windowOpen
+                    windowOpen && !isSubmitting
                       ? "bg-gradient-to-r from-[#1f2f74] to-[#2a4694] text-white shadow-[0_6px_16px_rgba(31,47,116,0.28)] transition-all duration-200 hover:from-[#19265f] hover:to-[#213a80] hover:shadow-[0_10px_24px_rgba(31,47,116,0.38)]"
                       : "cursor-not-allowed bg-gray-300 text-gray-600"
                   }`}
                 >
-                  {isEditingReturnedEntry
-                    ? "Resubmit Entry"
-                    : "Submit to My Entries"}
+                  {isSubmitting
+                    ? "Saving..."
+                    : isEditingReturnedEntry
+                      ? "Resubmit Entry"
+                      : "Submit to My Entries"}
                 </Button>
               </div>
             </div>

@@ -57,6 +57,7 @@ export default function AdminReview({
   onUpdateEntry,
   onDeleteEntry,
   onShowToast,
+  isLoading = false,
 }) {
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -97,61 +98,88 @@ export default function AdminReview({
     });
   }, [entries, searchTerm, statusFilter, unitFilter, yearFilter]);
 
-  const handleApprove = (note) => {
+  const handleApprove = async (note) => {
     if (!selectedEntry) return;
 
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Approved",
-      adminComment: note || "",
-      reviewedAt: new Date().toISOString(),
-    });
+    try {
+      await onUpdateEntry(selectedEntry.id, {
+        status: "Approved",
+        adminComment: note || "",
+        reviewedAt: new Date().toISOString(),
+      });
 
-    onShowToast?.({
-      title: "Entry approved",
-      description: `${entryTitle} was approved successfully.`,
-      type: "success",
-    });
+      onShowToast?.({
+        title: "Entry approved",
+        description: `${entryTitle} was approved successfully.`,
+        type: "success",
+      });
 
-    setSelectedEntry(null);
+      setSelectedEntry(null);
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to approve entry",
+        description:
+          error?.message || "The approval could not be saved. Please try again.",
+        type: "error",
+      });
+    }
   };
 
-  const handleReturn = (note) => {
+  const handleReturn = async (note) => {
     if (!selectedEntry) return;
 
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Returned",
-      adminComment: note,
-      reviewedAt: new Date().toISOString(),
-    });
+    try {
+      await onUpdateEntry(selectedEntry.id, {
+        status: "Returned",
+        adminComment: note,
+        reviewedAt: new Date().toISOString(),
+      });
 
-    onShowToast?.({
-      title: "Entry returned",
-      description: `${entryTitle} was returned for revision.`,
-      type: "success",
-    });
+      onShowToast?.({
+        title: "Entry returned",
+        description: `${entryTitle} was returned for revision.`,
+        type: "success",
+      });
 
-    setSelectedEntry(null);
+      setSelectedEntry(null);
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to return entry",
+        description:
+          error?.message || "The return action could not be saved. Please try again.",
+        type: "error",
+      });
+    }
   };
 
-  const handleReject = (note) => {
+  const handleReject = async (note) => {
     if (!selectedEntry) return;
 
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Rejected",
-      adminComment: note,
-      reviewedAt: new Date().toISOString(),
-    });
+    try {
+      await onUpdateEntry(selectedEntry.id, {
+        status: "Rejected",
+        adminComment: note,
+        reviewedAt: new Date().toISOString(),
+      });
 
-    onShowToast?.({
-      title: "Entry rejected",
-      description: `${entryTitle} was rejected.`,
-      type: "success",
-    });
+      onShowToast?.({
+        title: "Entry rejected",
+        description: `${entryTitle} was rejected.`,
+        type: "success",
+      });
 
-    setSelectedEntry(null);
+      setSelectedEntry(null);
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to reject entry",
+        description:
+          error?.message || "The rejection could not be saved. Please try again.",
+        type: "error",
+      });
+    }
   };
 
   const clearFilters = () => {
@@ -161,23 +189,31 @@ export default function AdminReview({
     setYearFilter("all");
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deleteTarget) return;
 
     const entryTitle = deleteTarget.titleOfActivities;
+    try {
+      await onDeleteEntry?.(deleteTarget.id);
+      onShowToast?.({
+        title: "Entry deleted",
+        description: `${entryTitle} was removed successfully.`,
+        type: "success",
+      });
 
-    onDeleteEntry?.(deleteTarget.id);
-    onShowToast?.({
-      title: "Entry deleted",
-      description: `${entryTitle} was removed successfully.`,
-      type: "success",
-    });
+      if (selectedEntry?.id === deleteTarget.id) {
+        setSelectedEntry(null);
+      }
 
-    if (selectedEntry?.id === deleteTarget.id) {
-      setSelectedEntry(null);
+      setDeleteTarget(null);
+    } catch (error) {
+      onShowToast?.({
+        title: "Unable to delete entry",
+        description:
+          error?.message || "The entry could not be deleted. Please try again.",
+        type: "error",
+      });
     }
-
-    setDeleteTarget(null);
   };
 
   return (
@@ -264,7 +300,11 @@ export default function AdminReview({
         </CardHeader>
 
         <CardContent className="p-0">
-          {filteredEntries.length === 0 ? (
+          {isLoading ? (
+            <div className="p-6 text-sm text-slate-500">
+              Loading submissions...
+            </div>
+          ) : filteredEntries.length === 0 ? (
             <div className="p-6 text-sm text-slate-500">
               No entries match the current filters.
             </div>
