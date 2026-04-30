@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,77 +41,110 @@ export default function AddNewAccount({
       [name]: value,
     }));
   };
+//changes
+  const handleCancel = () => {
+  navigate("/admin/manage-accounts");
+};
 
-  const handleSave = () => {
-    const nextErrors = {};
-    const normalizedUsername = form.username.trim().toLowerCase();
+  const handleSave = async () => {
+  const nextErrors = {};
+  const normalizedUsername = form.username.trim().toLowerCase();
 
-    if (!normalizedUsername) {
-      nextErrors.username = "Username is required.";
-    } else if (!/^(enc|adm)_[a-z0-9_]+$/.test(normalizedUsername)) {
-      nextErrors.username =
-        "Use a username like enc_jdelacruz or adm_jdelacruz.";
-    } else if (
-      (form.role === "encoder" && !normalizedUsername.startsWith("enc_")) ||
-      (form.role === "admin" && !normalizedUsername.startsWith("adm_"))
-    ) {
-      nextErrors.username =
-        form.role === "encoder"
-          ? "Encoder accounts must use the enc_ prefix."
-          : "Admin accounts must use the adm_ prefix.";
-    } else if (accounts.some((account) => account.username === normalizedUsername)) {
-      nextErrors.username = "This username is already assigned to another account.";
+  if (!normalizedUsername) {
+    nextErrors.username = "Username is required.";
+  } else if (!/^(enc|adm)_[a-z0-9_]+$/.test(normalizedUsername)) {
+    nextErrors.username =
+      "Use a username like enc_jdelacruz or adm_jdelacruz.";
+  } else if (
+    (form.role === "encoder" && !normalizedUsername.startsWith("enc_")) ||
+    (form.role === "admin" && !normalizedUsername.startsWith("adm_"))
+  ) {
+    nextErrors.username =
+      form.role === "encoder"
+        ? "Encoder accounts must use the enc_ prefix."
+        : "Admin accounts must use the adm_ prefix.";
+  } else if (
+    accounts.some((account) => account.username === normalizedUsername)
+  ) {
+    nextErrors.username =
+      "This username is already assigned to another account.";
+  }
+
+  if (!form.fullName.trim()) {
+    nextErrors.fullName = "Full name is required.";
+  }
+
+  if (!form.email.trim()) {
+    nextErrors.email = "Email is required.";
+  }
+
+  if (!form.password) {
+    nextErrors.password = "Password is required.";
+  } else if (form.password.length < 8) {
+    nextErrors.password = "Password must be at least 8 characters.";
+  }
+
+  if (!form.confirmPassword) {
+    nextErrors.confirmPassword = "Please confirm the password.";
+  } else if (form.password !== form.confirmPassword) {
+    nextErrors.confirmPassword = "Passwords do not match.";
+  }
+
+  setErrors(nextErrors);
+
+  if (Object.keys(nextErrors).length === 0) {
+    const createdName = form.fullName.trim();
+
+    // CREATE AUTH USER (changes)
+     const { data: authData, error: authError } =
+      await supabase.auth.signUp({
+        email: form.email,
+        password: form.password,
+      });
+
+    if (authError) {
+      setErrors({ email: authError.message });
+      return;
     }
 
-    if (!form.fullName.trim()) {
-      nextErrors.fullName = "Full name is required.";
-    }
+    const userId = authData.user?.id;
 
-    if (!form.email.trim()) {
-      nextErrors.email = "Email is required.";
-    }
-
-    if (!form.password) {
-      nextErrors.password = "Password is required.";
-    } else if (form.password.length < 8) {
-      nextErrors.password = "Password must be at least 8 characters.";
-    }
-
-    if (!form.confirmPassword) {
-      nextErrors.confirmPassword = "Please confirm the password.";
-    } else if (form.password !== form.confirmPassword) {
-      nextErrors.confirmPassword = "Passwords do not match.";
-    }
-
-    setErrors(nextErrors);
-
-    if (Object.keys(nextErrors).length === 0) {
-      const createdName = form.fullName.trim();
-
-      onAddAccount?.({
-        id:
-          typeof crypto !== "undefined" && crypto.randomUUID
-            ? crypto.randomUUID()
-            : String(Date.now()),
-        username: normalizedUsername,
-        fullName: form.fullName.trim(),
+    // INSERT INTO DATABASE TABLE (changes)
+    const { error: dbError } = await supabase.from("profiles").insert([
+      {
+        id: userId,
+        username: normalizedUsername, // example: enc_jdelacruz
+        full_name: form.fullName.trim(),
         email: form.email.trim(),
         role: form.role,
         status: "active",
-      });
-      onShowToast?.({
-        title: "Account created",
-        description: `${createdName} was added to All Accounts.`,
-        type: "success",
-      });
-      navigate("/admin/manage-accounts");
+      },
+    ]);
+
+    if (dbError) {
+      setErrors({ email: dbError.message });
+      return;
     }
-  };
 
-  const handleCancel = () => {
+    // KEEP ORIGINAL UI LOGIC (changes)
+    onAddAccount?.({
+      id: userId,
+      username: normalizedUsername,
+      fullName: form.fullName.trim(),
+      email: form.email.trim(),
+      role: form.role,
+      status: "active",
+    });
+
+    onShowToast?.({
+      title: "Account created",
+      description: `${createdName} was added to All Accounts.`,
+      type: "success",
+    });
+
     navigate("/admin/manage-accounts");
-  };
-
+  }
+};
   return (
     <div className="space-y-6">
       <div>

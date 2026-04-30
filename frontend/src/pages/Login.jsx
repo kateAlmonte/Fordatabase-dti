@@ -31,16 +31,32 @@ export default function Login({ onLogin, accounts = [] }) {
         setError("")
         
         try {
-            // Use email as username for Supabase auth
-            const email = formData.username.includes('@') 
-                ? formData.username.trim() 
-                : `${formData.username.trim()}@dti.gov.ph`
-            
-            const { user, session } = await authService.signIn(email, formData.password)
-            
-            // Get user profile to get role
+            // Resolve the input to an email address.
+            // - If the user typed something with "@", treat it as an email directly.
+            // - Otherwise, look up the email in the profiles table by username
+            //   via a SECURITY DEFINER RPC (so it works while the user is still
+            //   logged out and RLS would normally block reads).
+            const rawInput = formData.username.trim()
+            let email = rawInput
+
+            if (!rawInput.includes("@")) {
+                try {
+                    const lookedUpEmail = await authService.getEmailByUsername(rawInput)
+                    if (!lookedUpEmail) {
+                        setError("Invalid username or password.")
+                        return
+                    }
+                    email = lookedUpEmail
+                } catch (rpcError) {
+                    setError("Invalid username or password.")
+                    console.error("Username lookup failed:", rpcError)
+                    return
+                }
+            }
+
+            const { user } = await authService.signIn(email, formData.password)
             const profile = await authService.getProfile(user.id)
-            
+
             onLogin({
                 id: user.id,
                 username: profile.username,
@@ -49,7 +65,6 @@ export default function Login({ onLogin, accounts = [] }) {
                 role: profile.role,
                 status: profile.status
             })
-            
         } catch (error) {
             setError("Invalid username or password.")
             console.error('Login error:', error)

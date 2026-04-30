@@ -4,9 +4,71 @@ import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from '../lib/supabase';
+
+// === SUPABASE INTEGRATION (dropdowns only) ===
+// We load the AWPB template hierarchy and unit list from Supabase so the
+// dropdowns show live data that admins can edit through Manage Template.
+// The JSON file passed in via `templateData` is still used as a fallback
+// until the network request finishes (and as a safety net if it fails).
+import { templateService } from "../services/supabaseService";
 
 const FALLBACK_VALUE = "N/A";
+
+// ---------------------------------------------------------------------------
+// Reshape the flat `template_hierarchy` rows from Supabase into the nested
+// object the form already knows how to render:
+//   {
+//     "Component name": {
+//       "Sub component name": {
+//         "Key activity name": [
+//           { no, performanceIndicator, subActivities: [...] }
+//         ]
+//       }
+//     }
+//   }
+// ---------------------------------------------------------------------------
+function buildTemplateDataFromSupabase(hierarchyRows, unitRows) {
+  const hierarchy = {};
+
+  for (const row of hierarchyRows || []) {
+    const { component, sub_component, key_activity, activity_no,
+      performance_indicator, sub_activity } = row;
+    if (!component) continue;
+
+    // Ensure nested containers exist
+    if (!hierarchy[component]) hierarchy[component] = {};
+    if (!sub_component) continue;
+    if (!hierarchy[component][sub_component]) hierarchy[component][sub_component] = {};
+    if (!key_activity) continue;
+    if (!hierarchy[component][sub_component][key_activity]) {
+      hierarchy[component][sub_component][key_activity] = [];
+    }
+
+    // Find or create the activity-number entry (grouped by `no`)
+    const bucket = hierarchy[component][sub_component][key_activity];
+    let entry = bucket.find((item) => String(item.no) === String(activity_no));
+    if (!entry) {
+      entry = {
+        no: activity_no,
+        performanceIndicator: performance_indicator || "",
+        subActivities: [],
+      };
+      bucket.push(entry);
+    }
+
+    // Add sub-activity if present and not already tracked
+    if (sub_activity && !entry.subActivities.includes(sub_activity)) {
+      entry.subActivities.push(sub_activity);
+    }
+  }
+
+  const unitOptions = (unitRows || []).map((u) => ({
+    value: u.code || u.name,
+    aliases: [u.name, u.code].filter(Boolean),
+  }));
+
+  return { hierarchy, unitOptions };
+}
 
 const MONTHS = [
   { key: "jan", label: "Jan" },
@@ -123,10 +185,43 @@ export default function SubmitEntry({
   onDraftChange,
   onClearDraft,
   currentUser,
-  templateData,
+  templateData: templateDataProp,
 }) {
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
+
+  // -------------------------------------------------------------------------
+  // Load dropdown data from Supabase. Uses the JSON prop as an initial
+  // fallback so the form is never blank while the network request is in
+  // flight. Once Supabase responds, we replace the data with the live one.
+  // -------------------------------------------------------------------------
+  const [supabaseTemplateData, setSupabaseTemplateData] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [hierarchyRows, unitRows] = await Promise.all([
+          templateService.getHierarchy(),
+          templateService.getUnits(),
+        ]);
+        if (!cancelled) {
+          setSupabaseTemplateData(
+            buildTemplateDataFromSupabase(hierarchyRows, unitRows),
+          );
+        }
+      } catch (err) {
+        console.error("Failed to load template data from Supabase:", err);
+        // Fall back to the JSON prop silently
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Prefer Supabase data when available; otherwise use the JSON prop.
+  const templateData = supabaseTemplateData || templateDataProp;
 
   const {
     control,

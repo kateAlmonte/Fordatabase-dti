@@ -5,6 +5,37 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
+import {
+  createComponent,
+  updateComponent,
+  deleteComponentDB,
+
+  createSubComponent,
+  updateSubComponent,
+  deleteSubComponentDB,
+
+  createKeyActivity,
+  updateKeyActivity,
+  deleteKeyActivityDB,
+
+  createPerformanceIndicator,
+  updatePerformanceIndicator,
+  deletePerformanceIndicator,
+
+  createSubActivity,
+  updateSubActivity,
+  deleteSubActivityDB,
+} from "@/services/templateManagementService";
+
+import {
+  getComponents,
+  getSubComponents,
+  getKeyActivities,
+  getUnits,
+  getSubActivities,
+  getPerformance_indicators,
+} from "@/services/templateService";
+
 function cloneTemplateData(templateData) {
   return JSON.parse(JSON.stringify(templateData));
 }
@@ -86,12 +117,15 @@ export default function ManageTemplate({
 }) {
   const hierarchy = templateData?.hierarchy || {};
 
-  const componentNames = useMemo(
-    () => Object.keys(hierarchy),
-    [hierarchy],
-  );
-
   const [selectedComponent, setSelectedComponent] = useState("");
+
+  const [components, setComponents] = useState([]);
+  const [subComponents, setSubComponents] = useState([]);
+  const [keyActivities, setKeyActivities] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [subActivities, setSubActivities] = useState([]);
+  const [performance_indicators, setPerformance_indicators] = useState([]);
+
   const [selectedSubComponent, setSelectedSubComponent] = useState("");
   const [selectedKeyActivity, setSelectedKeyActivity] = useState("");
   const [selectedIndicatorIndex, setSelectedIndicatorIndex] = useState(0);
@@ -129,47 +163,128 @@ export default function ManageTemplate({
   });
   const [subActivityDraft, setSubActivityDraft] = useState("");
 
+   const componentNames = useMemo(() => {
+  return Array.isArray(components)
+    ? [...components]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((item) => item.name)
+    : [];
+}, [components]);
+
   const subComponentNames = useMemo(() => {
-    if (!selectedComponent) return [];
-    return Object.keys(hierarchy[selectedComponent] || {});
-  }, [hierarchy, selectedComponent]);
+  const selected = components.find(
+    (item) => item.name === selectedComponent
+  );
+
+  if (!selected) return [];
+
+  return subComponents
+    .filter((item) => item.component_id === selected.id)
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      })
+    )
+    .map((item) => item.name);
+}, [selectedComponent, components, subComponents]);
 
   const keyActivityNames = useMemo(() => {
-    if (!selectedComponent || !subComponentNames.includes(selectedSubComponent)) return [];
-    return Object.keys(
-      hierarchy[selectedComponent]?.[selectedSubComponent] || {},
-    );
-  }, [hierarchy, selectedComponent, selectedSubComponent, subComponentNames]);
+  const selectedComp = components.find(
+    (item) => item.name === selectedComponent
+  );
+
+  if (!selectedComp) return [];
+
+  const selectedSub = subComponents.find(
+    (item) =>
+      item.name === selectedSubComponent &&
+      item.component_id === selectedComp.id
+  );
+
+  if (!selectedSub) return [];
+
+  return keyActivities
+    .filter((item) => item.sub_component_id === selectedSub.id)
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((item) => item.name);
+}, [
+  selectedComponent,
+  selectedSubComponent,
+  components,
+  subComponents,
+  keyActivities,
+]);
 
   const indicatorItems = useMemo(() => {
-    if (
-      !selectedComponent ||
-      !subComponentNames.includes(selectedSubComponent) ||
-      !keyActivityNames.includes(selectedKeyActivity)
-    ) {
-      return [];
-    }
+  const selectedKA = keyActivities.find(
+    (item) => item.name === selectedKeyActivity
+  );
 
-    return (
-      hierarchy[selectedComponent]?.[selectedSubComponent]?.[selectedKeyActivity] ||
-      []
-    );
-  }, [
-    hierarchy,
-    selectedComponent,
-    selectedSubComponent,
-    selectedKeyActivity,
-    subComponentNames,
-    keyActivityNames,
-  ]);
+  if (!selectedKA) return [];
 
-  const selectedIndicator = indicatorItems[selectedIndicatorIndex] || null;
-  const subActivityItems = selectedIndicator?.subActivities || [];
-  const selectedSubActivity = subActivityItems[selectedSubActivityIndex] || "";
-  const hasComponentSelected = componentNames.includes(selectedComponent);
-  const hasSubComponentSelected = subComponentNames.includes(selectedSubComponent);
-  const hasKeyActivitySelected = keyActivityNames.includes(selectedKeyActivity);
-  const hasIndicatorSelected = Boolean(selectedIndicator);
+  return performance_indicators
+    .filter((item) => item.key_activity_id === selectedKA.id)
+    .sort((a, b) => Number(a.activity_no) - Number(b.activity_no))
+    .map((item) => ({
+      label: item.activity_no,
+      value: item.id,
+      performance_indicators: item.label,
+    }));
+}, [
+  selectedKeyActivity,
+  keyActivities,
+  performance_indicators,
+]);
+
+  
+  const selectedIndicator = indicatorItems[selectedIndicatorIndex] || indicatorItems[0] || null;
+
+const subActivityItems = useMemo(() => {
+  if (!selectedIndicator) return [];
+
+  return subActivities
+    .filter(
+      (item) =>
+        item.performance_indicator_id === selectedIndicator.value
+    )
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((item) => item.name);
+}, [selectedIndicator, subActivities]);
+
+const selectedSubActivity = subActivityItems[selectedSubActivityIndex] || "";
+
+const hasComponentSelected =
+  componentNames.includes(selectedComponent);
+
+const hasSubComponentSelected =
+  subComponentNames.includes(selectedSubComponent);
+
+const hasKeyActivitySelected =
+  keyActivityNames.includes(selectedKeyActivity);
+
+const hasIndicatorSelected =
+  Boolean(selectedIndicator);
+
+  const loadData = async () => {
+  const { data: c } = await getComponents();
+  const { data: s } = await getSubComponents();
+  const { data: k } = await getKeyActivities();
+  const { data: u } = await getUnits();
+  const { data: pi } = await getPerformance_indicators();
+  const { data: sa } = await getSubActivities();
+
+  setComponents(c || []);
+  setSubComponents(s || []);
+  setKeyActivities(k || []);
+  setUnits(u || []);
+  setPerformance_indicators(pi || []);
+  setSubActivities(sa || []);
+};
+
+useEffect(() => {
+  loadData();
+}, []);
 
   useEffect(() => {
     if (componentNames.length === 0) {
@@ -248,8 +363,8 @@ export default function ManageTemplate({
     }
 
     setIndicatorDraft({
-      no: String(selectedIndicator.no ?? ""),
-      performanceIndicator: selectedIndicator.performanceIndicator || "",
+      no: String(selectedIndicator.label ?? ""),
+performanceIndicator: selectedIndicator.performanceIndicator || ""
     });
   }, [selectedIndicator]);
 
@@ -263,413 +378,409 @@ export default function ManageTemplate({
     onUpdateTemplateData?.(nextTemplate);
   };
 
-  const addComponent = () => {
-    const name = normalizeName(newComponentName);
+  const addComponent = async () => {
+  const name = normalizeName(newComponentName);
 
-    if (!name) return;
-    if (componentNames.includes(name)) {
-      onShowToast?.({
-        title: "Duplicate component",
-        description: "That component already exists in the template.",
-      });
-      return;
-    }
+  if (!name) return;
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[name] = {};
-    });
+  const { error } = await createComponent(name);
 
-    setNewComponentName("");
-    setSelectedComponent(name);
-    setSelectedSubComponent("");
-    setSelectedKeyActivity("");
-    setSelectedIndicatorIndex(0);
-    setSelectedSubActivityIndex(0);
-    setComponentMenuOpen(false);
-    setShowAddComponentInput(false);
-    setEditingComponentName("");
+  if (error) {
     onShowToast?.({
-      title: "Component added",
-      description: `${name} is now part of the template.`,
-      type: "success",
+      title: "Error",
+      description: error.message,
+      type: "error",
     });
-  };
+    return;
+  }
 
-  const renameComponent = () => {
-    const nextName = normalizeName(componentDraft);
+  onShowToast?.({
+    title: "Component added",
+    description: `${name} saved to Supabase.`,
+    type: "success",
+  });
 
-    if (!selectedComponent || !nextName || nextName === selectedComponent) {
-      setEditingComponentName("");
-      return;
-    }
-    if (componentNames.includes(nextName)) {
-      onShowToast?.({
-        title: "Duplicate component",
-        description: "Choose a different component name.",
-      });
-      return;
-    }
+  setNewComponentName("");
+  setComponentMenuOpen(false);
+  setShowAddComponentInput(false);
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[nextName] = nextTemplate.hierarchy[selectedComponent];
-      delete nextTemplate.hierarchy[selectedComponent];
-    });
+  await loadData();
+setSelectedComponent(name);
+};
 
-    setSelectedComponent(nextName);
-    setEditingComponentName("");
+  const renameComponent = async () => {
+  const nextName = normalizeName(componentDraft);
+  if (!selectedComponent || !nextName) return;
+
+  const selected = components.find(
+    (item) => item.name === selectedComponent
+  );
+  if (!selected) return;
+
+  const { error } = await updateComponent(selected.id, nextName);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await loadData();
+  setSelectedComponent(nextName);
+  setEditingComponentName("");
+};
+
+  const deleteComponent = async () => {
+  if (!deleteTarget || deleteTarget.kind !== "component") return;
+
+  const { error } = await deleteComponentDB(deleteTarget.id);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await loadData();
+  setDeleteTarget(null);
+};
+
+  const addSubComponent = async () => {
+  const name = normalizeName(newSubComponentName);
+
+  if (!selectedComponent || !name) return;
+
+  const selected = components.find(
+    (item) => item.name === selectedComponent
+  );
+
+  if (!selected) {
     onShowToast?.({
-      title: "Component renamed",
-      description: `Component updated to ${nextName}.`,
-      type: "success",
+      title: "Error",
+      description: "Please select a component first.",
+      type: "error",
     });
-  };
+    return;
+  }
 
-  const deleteComponent = () => {
-    if (!deleteTarget || deleteTarget.kind !== "component") return;
+  const { error } = await createSubComponent(selected.id, name);
 
-    updateTemplate((nextTemplate) => {
-      delete nextTemplate.hierarchy[deleteTarget.label];
-    });
+  if (error) {
+  console.log("SUB COMPONENT ERROR:", error);
+  alert(error.message);
+  return;
+}
 
+  onShowToast?.({
+    title: "Sub Component added",
+    description: `${name} saved to Supabase.`,
+    type: "success",
+  });
+
+  setNewSubComponentName("");
+  setSubComponentMenuOpen(false);
+  setShowAddSubComponentInput(false);
+
+  await loadData();
+  setSelectedSubComponent(name);
+};
+
+  const renameSubComponent = async () => {
+  const nextName = normalizeName(subComponentDraft);
+  if (!selectedSubComponent || !nextName) return;
+
+  const selected = subComponents.find(
+    (item) => item.name === selectedSubComponent
+  );
+
+  if (!selected) return;
+
+  const { error } = await updateSubComponent(selected.id, nextName);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await loadData();
+  setSelectedSubComponent(nextName);
+};
+
+  const deleteSubComponent = async () => {
+  if (!deleteTarget || deleteTarget.kind !== "subComponent") return;
+
+  const selected = subComponents.find(
+    (item) => item.name === deleteTarget.label
+  );
+
+  if (!selected) return;
+
+  const { error } = await deleteSubComponentDB(selected.id);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await loadData();
+  setDeleteTarget(null);
+};
+
+  const addKeyActivity = async () => {
+  const name = normalizeName(newKeyActivityName);
+
+  if (!selectedSubComponent || !name) return;
+
+  const selectedComp = components.find(
+    (item) => item.name === selectedComponent
+  );
+
+  if (!selectedComp) return;
+
+  const selectedSub = subComponents.find(
+    (item) =>
+      item.name === selectedSubComponent &&
+      item.component_id === selectedComp.id
+  );
+
+  if (!selectedSub) return;
+
+  const { error } = await createKeyActivity(selectedSub.id, name);
+
+  if (error) {
     onShowToast?.({
-      title: "Component deleted",
-      description: `${deleteTarget.label} was removed from the template.`,
-      type: "success",
+      title: "Error",
+      description: error.message,
+      type: "error",
     });
-    setEditingComponentName("");
-    setDeleteTarget(null);
-  };
+    return;
+  }
 
-  const addSubComponent = () => {
-    const name = normalizeName(newSubComponentName);
+  await loadData();
 
-    if (!selectedComponent || !name) return;
-    if (subComponentNames.includes(name)) {
-      onShowToast?.({
-        title: "Duplicate sub component",
-        description: "That sub component already exists.",
-      });
-      return;
-    }
+  setSelectedKeyActivity(name);
+  setNewKeyActivityName("");
+  setShowAddKeyActivityInput(false);
+  setKeyActivityMenuOpen(false);
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[selectedComponent][name] = {};
-    });
+  onShowToast?.({
+    title: "Key Activity Added",
+    description: "Saved to Supabase successfully.",
+    type: "success",
+  });
+};
 
-    setNewSubComponentName("");
-    setSelectedSubComponent(name);
-    setSelectedKeyActivity("");
-    setSelectedIndicatorIndex(0);
-    setSelectedSubActivityIndex(0);
-    setSubComponentMenuOpen(false);
-    setShowAddSubComponentInput(false);
-    setEditingSubComponentName("");
+  const renameKeyActivity = async () => {
+  const nextName = normalizeName(keyActivityDraft);
+  if (!selectedKeyActivity || !nextName) return;
+
+  const selected = keyActivities.find(
+    (item) => item.name === selectedKeyActivity
+  );
+
+  if (!selected) return;
+
+  const { error } = await updateKeyActivity(selected.id, {
+    name: nextName,
+  });
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  await loadData();
+  setSelectedKeyActivity(nextName);
+};
+
+  const deleteKeyActivity = async () => {
+  if (
+    !deleteTarget ||
+    deleteTarget.kind !== "keyActivity"
+  ) return;
+
+  const selectedItem = keyActivities.find(
+    (item) => item.name === deleteTarget.label
+  );
+
+  if (!selectedItem) return;
+
+  const { error } = await deleteKeyActivityDB(selectedItem.id);
+
+  if (error) {
     onShowToast?.({
-      title: "Sub component added",
-      description: `${name} was added under ${selectedComponent}.`,
-      type: "success",
+      title: "Error",
+      description: error.message,
+      type: "error",
     });
-  };
+    return;
+  }
 
-  const renameSubComponent = () => {
-    const nextName = normalizeName(subComponentDraft);
+  await loadData();
 
-    if (!selectedComponent || !hasSubComponentSelected || !nextName || nextName === selectedSubComponent) {
-      return;
-    }
-    if (subComponentNames.includes(nextName)) {
-      onShowToast?.({
-        title: "Duplicate sub component",
-        description: "Choose a different sub component name.",
-      });
-      return;
-    }
+  setDeleteTarget(null);
+  setEditingKeyActivityName("");
 
-    updateTemplate((nextTemplate) => {
-      const componentNode = nextTemplate.hierarchy[selectedComponent];
-      componentNode[nextName] = componentNode[selectedSubComponent];
-      delete componentNode[selectedSubComponent];
-    });
+  onShowToast?.({
+    title: "Deleted",
+    description: "Key Activity removed successfully.",
+    type: "success",
+  });
+};
 
-    setSelectedSubComponent(nextName);
-    onShowToast?.({
-      title: "Sub component renamed",
-      description: `Sub component updated to ${nextName}.`,
-      type: "success",
-    });
-  };
+const addIndicator = async () => {
+  const no = normalizeName(newIndicatorNo);
+  const text = normalizeName(newIndicatorText);
 
-  const deleteSubComponent = () => {
-    if (!deleteTarget || deleteTarget.kind !== "subComponent" || !selectedComponent) {
-      return;
-    }
+  if (!selectedKeyActivity || !no || !text) return;
 
-    updateTemplate((nextTemplate) => {
-      delete nextTemplate.hierarchy[selectedComponent][deleteTarget.label];
-    });
+  const selectedKA = keyActivities.find(
+    (item) => item.name === selectedKeyActivity
+  );
 
-    onShowToast?.({
-      title: "Sub component deleted",
-      description: `${deleteTarget.label} was removed.`,
-      type: "success",
-    });
-    setEditingSubComponentName("");
-    setDeleteTarget(null);
-  };
+  if (!selectedKA) return;
 
-  const addKeyActivity = () => {
-    const name = normalizeName(newKeyActivityName);
+  const { error } = await createPerformanceIndicator(
+    selectedKA.id,
+    no,
+    text
+  );
 
-    if (!selectedComponent || !hasSubComponentSelected || !name) return;
-    if (keyActivityNames.includes(name)) {
-      onShowToast?.({
-        title: "Duplicate key activity",
-        description: "That key activity already exists.",
-      });
-      return;
-    }
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[selectedComponent][selectedSubComponent][name] = [];
-    });
+  await loadData();
+  setSelectedIndicatorIndex(indicatorItems.length);
 
-    setNewKeyActivityName("");
-    setSelectedKeyActivity(name);
-    setSelectedIndicatorIndex(0);
-    setSelectedSubActivityIndex(0);
-    setKeyActivityMenuOpen(false);
-    setShowAddKeyActivityInput(false);
-    setEditingKeyActivityName("");
-    onShowToast?.({
-      title: "Key activity added",
-      description: `${name} was added to the template.`,
-      type: "success",
-    });
-  };
+  setNewIndicatorNo("");
+  setNewIndicatorText("");
+  setShowAddIndicatorInput(false);
+};
 
-  const renameKeyActivity = () => {
-    const nextName = normalizeName(keyActivityDraft);
+  const saveIndicator = async () => {
+  if (!selectedIndicator) return;
 
-    if (!selectedComponent || !hasSubComponentSelected || !selectedKeyActivity || !nextName || nextName === selectedKeyActivity) {
-      return;
-    }
-    if (keyActivityNames.includes(nextName)) {
-      onShowToast?.({
-        title: "Duplicate key activity",
-        description: "Choose a different key activity name.",
-      });
-      return;
-    }
+  const { error } = await updatePerformanceIndicator(
+    selectedIndicator.value,
+    indicatorDraft.no,
+    indicatorDraft.performanceIndicator
+  );
 
-    updateTemplate((nextTemplate) => {
-      const subComponentNode =
-        nextTemplate.hierarchy[selectedComponent][selectedSubComponent];
-      subComponentNode[nextName] = subComponentNode[selectedKeyActivity];
-      delete subComponentNode[selectedKeyActivity];
-    });
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    setSelectedKeyActivity(nextName);
-    onShowToast?.({
-      title: "Key activity renamed",
-      description: `Key activity updated to ${nextName}.`,
-      type: "success",
-    });
-  };
+  await loadData();
+  setEditingIndicatorIndex(null);
+};
 
-  const deleteKeyActivity = () => {
-    if (
-      !deleteTarget ||
-      deleteTarget.kind !== "keyActivity" ||
-      !selectedComponent ||
-      !hasSubComponentSelected
-    ) {
-      return;
-    }
+ const deleteIndicator = async () => {
+  if (!deleteTarget || deleteTarget.kind !== "indicator") return;
 
-    updateTemplate((nextTemplate) => {
-      delete nextTemplate.hierarchy[selectedComponent][selectedSubComponent][deleteTarget.label];
-    });
+  const current = indicatorItems[deleteTarget.index];
+  if (!current) return;
 
-    onShowToast?.({
-      title: "Key activity deleted",
-      description: `${deleteTarget.label} was removed.`,
-      type: "success",
-    });
-    setEditingKeyActivityName("");
-    setDeleteTarget(null);
-  };
+  const { error } = await deletePerformanceIndicator(current.value);
 
-  const addIndicator = () => {
-    const nextNo = normalizeIndicatorNo(newIndicatorNo);
-    const nextText = normalizeName(newIndicatorText);
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    if (!selectedComponent || !hasSubComponentSelected || !selectedKeyActivity) return;
-    if (nextNo === "" || !nextText) return;
-    if (indicatorItems.some((item) => String(item.no) === String(nextNo))) {
-      onShowToast?.({
-        title: "Duplicate No.",
-        description: "That performance indicator number already exists here.",
-      });
-      return;
-    }
+  await loadData();
+  setDeleteTarget(null);
+};
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity].push({
-        no: nextNo,
-        performanceIndicator: nextText,
-        subActivities: [],
-      });
-    });
+const addSubActivity = async () => {
+  const text = normalizeName(newSubActivityText);
 
-    setNewIndicatorNo("");
-    setNewIndicatorText("");
-    setSelectedIndicatorIndex(indicatorItems.length);
-    setSelectedSubActivityIndex(0);
-    setIndicatorMenuOpen(false);
-    setShowAddIndicatorInput(false);
-    setEditingIndicatorIndex(null);
-    onShowToast?.({
-      title: "Performance indicator added",
-      description: `No. ${nextNo} was added under ${selectedKeyActivity}.`,
-      type: "success",
-    });
-  };
+  if (!selectedIndicator || !text) return;
 
-  const saveIndicator = () => {
-    if (!selectedComponent || !hasSubComponentSelected || !selectedKeyActivity || !selectedIndicator) {
-      return;
-    }
+  const { error } = await createSubActivity(
+    selectedIndicator.value,
+    text
+  );
 
-    const nextNo = normalizeIndicatorNo(indicatorDraft.no);
-    const nextText = normalizeName(indicatorDraft.performanceIndicator);
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    if (nextNo === "" || !nextText) {
-      onShowToast?.({
-        title: "Missing indicator details",
-        description: "Indicator No. and Performance Indicator are required.",
-      });
-      return;
-    }
+  await loadData();
+  setSelectedSubActivityIndex(subActivityItems.length);
 
-    if (
-      indicatorItems.some(
-        (item, index) =>
-          index !== selectedIndicatorIndex && String(item.no) === String(nextNo),
-      )
-    ) {
-      onShowToast?.({
-        title: "Duplicate No.",
-        description: "Choose a different indicator number.",
-      });
-      return;
-    }
+  setNewSubActivityText("");
+  setShowAddSubActivityInput(false);
+};
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity][selectedIndicatorIndex] = {
-        no: nextNo,
-        performanceIndicator: nextText,
-        subActivities: selectedIndicator.subActivities || [],
-      };
-    });
+const saveSubActivity = async () => {
+  const nextText = normalizeName(subActivityDraft);
 
-    onShowToast?.({
-      title: "Indicator updated",
-      description: `No. ${nextNo} was updated successfully.`,
-      type: "success",
-    });
-  };
+  if (
+    editingSubActivityIndex === null ||
+    !selectedIndicator ||
+    !nextText
+  ) return;
 
-  const deleteIndicator = () => {
-    if (
-      !deleteTarget ||
-      deleteTarget.kind !== "indicator" ||
-      !selectedComponent ||
-      !hasSubComponentSelected ||
-      !selectedKeyActivity
-    ) {
-      return;
-    }
+  const currentItem = subActivities.filter(
+    (item) =>
+      item.performance_indicator_id === selectedIndicator.value
+  )[editingSubActivityIndex];
 
-    updateTemplate((nextTemplate) => {
-      nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity].splice(
-        deleteTarget.index,
-        1,
-      );
-    });
+  if (!currentItem) return;
 
-    onShowToast?.({
-      title: "Indicator deleted",
-      description: `No. ${deleteTarget.label} was removed.`,
-      type: "success",
-    });
-    setEditingIndicatorIndex(null);
-    setDeleteTarget(null);
-  };
+  const { error } = await updateSubActivity(currentItem.id, nextText);
 
-  const addSubActivity = () => {
-    const nextText = normalizeName(newSubActivityText);
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    if (!selectedIndicator || !nextText) return;
+  await loadData();
 
-    updateTemplate((nextTemplate) => {
-      const targetIndicator =
-        nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity][selectedIndicatorIndex];
-      targetIndicator.subActivities = [...(targetIndicator.subActivities || []), nextText];
-    });
+  setEditingSubActivityIndex(null);
 
-    setNewSubActivityText("");
-    setSelectedSubActivityIndex(subActivityItems.length);
-    setSubActivityMenuOpen(false);
-    setShowAddSubActivityInput(false);
-    setEditingSubActivityIndex(null);
-    onShowToast?.({
-      title: "Sub activity added",
-      description: "A new sub activity was added to the selected indicator.",
-      type: "success",
-    });
-  };
+  onShowToast?.({
+    title: "Updated",
+    description: "Sub Activity updated successfully.",
+    type: "success",
+  });
+};
 
-  const saveSubActivity = () => {
-    const nextText = normalizeName(subActivityDraft);
+const deleteSubActivity = async () => {
+  if (
+    !deleteTarget ||
+    deleteTarget.kind !== "subActivity" ||
+    !selectedIndicator
+  ) return;
 
-    if (!selectedIndicator || !selectedSubActivity || !nextText) return;
+  const currentItem = subActivities.filter(
+    (item) =>
+      item.performance_indicator_id === selectedIndicator.value
+  )[deleteTarget.index];
 
-    updateTemplate((nextTemplate) => {
-      const targetIndicator =
-        nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity][selectedIndicatorIndex];
-      targetIndicator.subActivities[selectedSubActivityIndex] = nextText;
-    });
+  if (!currentItem) return;
 
-    onShowToast?.({
-      title: "Sub activity updated",
-      description: "The selected sub activity was updated successfully.",
-      type: "success",
-    });
-  };
+  const { error } = await deleteSubActivityDB(currentItem.id);
 
-  const deleteSubActivity = () => {
-    if (
-      !deleteTarget ||
-      deleteTarget.kind !== "subActivity" ||
-      !selectedIndicator
-    ) {
-      return;
-    }
+  if (error) {
+    alert(error.message);
+    return;
+  }
 
-    updateTemplate((nextTemplate) => {
-      const targetIndicator =
-        nextTemplate.hierarchy[selectedComponent][selectedSubComponent][selectedKeyActivity][selectedIndicatorIndex];
-      targetIndicator.subActivities.splice(deleteTarget.index, 1);
-    });
+  await loadData();
 
-    onShowToast?.({
-      title: "Sub activity deleted",
-      description: "The selected sub activity was removed.",
-      type: "success",
-    });
-    setEditingSubActivityIndex(null);
-    setDeleteTarget(null);
-  };
+  setDeleteTarget(null);
+  setEditingSubActivityIndex(null);
+  setSelectedSubActivityIndex(0);
+
+  onShowToast?.({
+    title: "Deleted",
+    description: "Sub Activity removed successfully.",
+    type: "success",
+  });
+};
 
   return (
     <div className="space-y-6">
@@ -794,7 +905,15 @@ export default function ManageTemplate({
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setComponentDeleteTarget(name)}
+                               onClick={() => {
+                               const selected = components.find((item) => item.name === name);
+
+                               setDeleteTarget({
+                               kind: "component",
+                               id: selected?.id,
+                               label: name,
+                                  });
+                            }}
                                   className={deleteActionIconButtonClass}
                                   aria-label="Delete component"
                                 >
@@ -1239,7 +1358,7 @@ export default function ManageTemplate({
               className={dropdownTriggerClass}
             >
               <span className="truncate">
-                {selectedIndicator ? `No. ${selectedIndicator.no}` : "Select performance indicator"}
+                {selectedIndicator ? `No. ${selectedIndicator.label}` : "Select performance indicator"}
               </span>
               <ChevronDown
                 size={16}
@@ -1257,7 +1376,7 @@ export default function ManageTemplate({
                   ) : (
                     indicatorItems.map((item, index) => (
                       <div
-                        key={`${item.no}-${index}`}
+                        key={`${item.value}-${index}`}
                         className={`flex items-start gap-2 rounded-xl border px-3 py-2 transition ${
                           selectedIndicatorIndex === index
                             ? "border-slate-900 bg-slate-50"
@@ -1297,9 +1416,9 @@ export default function ManageTemplate({
                             }}
                             className="min-w-0 flex-1 text-left"
                           >
-                            <p className="text-sm font-medium text-slate-800">No. {item.no}</p>
+                            <p className="text-sm font-medium text-slate-800">No. {item.label}</p>
                             <p className="mt-1 line-clamp-2 text-xs text-slate-500">
-                              {item.performanceIndicator}
+                              {item.performance_indicators}
                             </p>
                           </button>
                         )}
@@ -1323,8 +1442,8 @@ export default function ManageTemplate({
                                   onClick={() => {
                                     setEditingIndicatorIndex(null);
                                     setIndicatorDraft({
-                                      no: String(item.no ?? ""),
-                                      performanceIndicator: item.performanceIndicator || "",
+                                    no: String(item.label ?? ""),
+                                    performanceIndicator: item.performance_indicators || "",
                                     });
                                   }}
                                   className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
@@ -1340,8 +1459,8 @@ export default function ManageTemplate({
                                   onClick={() => {
                                     setSelectedIndicatorIndex(index);
                                     setIndicatorDraft({
-                                      no: String(item.no ?? ""),
-                                      performanceIndicator: item.performanceIndicator || "",
+                                    no: String(item.label ?? ""),
+                                    performanceIndicator: item.performance_indicators || "",
                                     });
                                     setEditingIndicatorIndex(index);
                                     setShowAddIndicatorInput(false);
@@ -1356,7 +1475,7 @@ export default function ManageTemplate({
                                   onClick={() =>
                                     setDeleteTarget({
                                       kind: "indicator",
-                                      label: String(item.no),
+                                      label: String(item.label),
                                       index,
                                     })
                                   }

@@ -1,8 +1,59 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, Eye, Trash2 } from "lucide-react";
 
 import AdminEntryReviewModal from "../components/admin/AdminEntryReviewModal";
 import AdminDeleteEntryModal from "../components/admin/AdminDeleteEntryModal";
+
+// === CONNECTING TO SUPABASE ===
+// We use entriesService to save admin actions (approve / return / reject /
+// delete) directly to the database, so the encoder sees them after refresh.
+// We also use the supabase client directly to read the admin_entry_view,
+// which already joins the names (unit, component, etc.) so we don't need to
+// look them up ourselves.
+import { supabase } from "../lib/supabase";
+import { entriesService } from "../services/supabaseService";
+
+// ---------------------------------------------------------------------------
+// The database speaks snake_case (title_of_activities). The UI speaks
+// camelCase (titleOfActivities). This helper translates one row from the
+// admin_entry_view into the shape the rest of this page expects.
+// ---------------------------------------------------------------------------
+function transformViewRow(row) {
+  if (!row) return row;
+
+  // Some rows store the monthly breakdown as a JSON array. We convert it
+  // into the shape the table preview / modal expect.
+  const monthlyBreakdown = Array.isArray(row.monthly_breakdown)
+    ? row.monthly_breakdown.map((m) => ({
+        month: m.month,
+        target: m.target_quantity ?? m.target ?? 0,
+        amount: (m.target_quantity ?? m.target ?? 0) * (row.unit_cost || 0),
+      }))
+    : [];
+
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    ownerUsername: row.owner_username || "",
+    ownerFullName: row.owner_full_name || "",
+    planningYear: row.planning_year,
+    unit: row.unit,
+    component: row.component,
+    subComponent: row.sub_component,
+    keyActivity: row.key_activity,
+    no: row.activity_no ?? "",
+    performanceIndicator: row.performance_indicator || "",
+    subActivity: row.sub_activity || "",
+    titleOfActivities: row.title_of_activities,
+    unitCost: Number(row.unit_cost) || 0,
+    status: row.status,
+    adminComment: row.reviewer_notes || row.admin_comment || "",
+    submittedAt: row.submitted_at || row.submission_date || "",
+    reviewedAt: row.reviewed_at || row.review_date || "",
+    monthlyBreakdown,
+    grandTotal: Number(row.grand_total) || 0,
+  };
+}
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -53,7 +104,7 @@ function getStatusBadgeVariant(status) {
 }
 
 export default function AdminReview({
-  entries = [],
+  entries: entriesProp = [],
   onUpdateEntry,
   onDeleteEntry,
   onShowToast,
@@ -64,6 +115,56 @@ export default function AdminReview({
   const [statusFilter, setStatusFilter] = useState("all");
   const [unitFilter, setUnitFilter] = useState("all");
   const [yearFilter, setYearFilter] = useState("all");
+
+  // -------------------------------------------------------------------------
+  // Load the real list of entries from Supabase when the page opens.
+  //
+  // Steps:
+  //   1. Ask Supabase for all entries (entriesService.getAll() automatically
+  //      returns everyone's entries because we're logged in as admin).
+  //   2. Save them in local state so the table shows real data.
+  //   3. While the network request is in flight, we fall back to whatever
+  //      the parent App.jsx passed in, so the page is never blank.
+  //   4. If anything fails, show an error toast.
+  // -------------------------------------------------------------------------
+  const [supabaseEntries, setSupabaseEntries] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // Query admin_entry_view directly because it already includes the
+        // joined names (unit, component, sub_component, key_activity) plus
+        // the computed grand_total and monthly_breakdown.
+        const { data, error } = await supabase
+          .from("admin_entry_view")
+          .select("*")
+          .order("submitted_at", { ascending: false });
+
+        if (error) throw error;
+
+        // Translate every snake_case row into the camelCase shape the rest
+        // of the page expects.
+        const translated = (data || []).map(transformViewRow);
+        if (!cancelled) setSupabaseEntries(translated);
+      } catch (err) {
+        console.error("Failed to load entries from Supabase:", err);
+        if (!cancelled) {
+          onShowToast?.({
+            title: "Could not load entries",
+            description: err.message || "Please refresh the page.",
+            type: "error",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onShowToast]);
+
+  // Use live Supabase data when it's ready; otherwise fall back to the prop.
+  const entries = supabaseEntries ?? entriesProp;
 
   const availableUnits = useMemo(() => {
     return [...new Set(entries.map((entry) => entry.unit).filter(Boolean))].sort();
@@ -97,61 +198,97 @@ export default function AdminReview({
     });
   }, [entries, searchTerm, statusFilter, unitFilter, yearFilter]);
 
+  // -------------------------------------------------------------------------
+  // Shared helper used by Approve / Return / Reject.
+  //
+  // Steps:
+  //   1. Translate the UI fields (status, adminComment, reviewedAt) into the
+  //      database column names (status, reviewer_notes, review_date).
+  //   2. Send the update to Supabase.
+  //   3. Also update the local list so the admin sees the change instantly.
+  //   4. Show the success toast.
+  // If anything fails, we show an error toast and do NOT close the modal so
+  // the admin can try again.
+  // -------------------------------------------------------------------------
+  const persistEntryUpdate = async (entryId, uiUpdates, successToast) => {
+    // Translate UI field names -> Supabase column names
+    const dbUpdates = {
+      status: uiUpdates.status,
+      reviewer_notes: uiUpdates.adminComment ?? "",
+      review_date: uiUpdates.reviewedAt,
+    };
+
+    try {
+      // Save to Supabase and capture the refreshed row
+      const updatedEntry = await entriesService.update(entryId, dbUpdates);
+
+      // Keep the local list (in App.jsx) in sync using the full entry row
+      onUpdateEntry?.(entryId, updatedEntry);
+
+      onShowToast?.(successToast);
+      setSelectedEntry(null);
+    } catch (err) {
+      console.error("Failed to update entry in Supabase:", err);
+      onShowToast?.({
+        title: "Could not save changes",
+        description: err.message || "Please try again.",
+        type: "error",
+      });
+    }
+  };
+
   const handleApprove = (note) => {
     if (!selectedEntry) return;
-
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Approved",
-      adminComment: note || "",
-      reviewedAt: new Date().toISOString(),
-    });
-
-    onShowToast?.({
-      title: "Entry approved",
-      description: `${entryTitle} was approved successfully.`,
-      type: "success",
-    });
-
-    setSelectedEntry(null);
+    persistEntryUpdate(
+      selectedEntry.id,
+      {
+        status: "Approved",
+        adminComment: note || "",
+        reviewedAt: new Date().toISOString(),
+      },
+      {
+        title: "Entry approved",
+        description: `${entryTitle} was approved successfully.`,
+        type: "success",
+      },
+    );
   };
 
   const handleReturn = (note) => {
     if (!selectedEntry) return;
-
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Returned",
-      adminComment: note,
-      reviewedAt: new Date().toISOString(),
-    });
-
-    onShowToast?.({
-      title: "Entry returned",
-      description: `${entryTitle} was returned for revision.`,
-      type: "success",
-    });
-
-    setSelectedEntry(null);
+    persistEntryUpdate(
+      selectedEntry.id,
+      {
+        status: "Returned",
+        adminComment: note,
+        reviewedAt: new Date().toISOString(),
+      },
+      {
+        title: "Entry returned",
+        description: `${entryTitle} was returned for revision.`,
+        type: "success",
+      },
+    );
   };
 
   const handleReject = (note) => {
     if (!selectedEntry) return;
-
     const entryTitle = selectedEntry.titleOfActivities;
-    onUpdateEntry(selectedEntry.id, {
-      status: "Rejected",
-      adminComment: note,
-      reviewedAt: new Date().toISOString(),
-    });
-
-    onShowToast?.({
-      title: "Entry rejected",
-      description: `${entryTitle} was rejected.`,
-      type: "success",
-    });
-
-    setSelectedEntry(null);
+    persistEntryUpdate(
+      selectedEntry.id,
+      {
+        status: "Rejected",
+        adminComment: note,
+        reviewedAt: new Date().toISOString(),
+      },
+      {
+        title: "Entry rejected",
+        description: `${entryTitle} was rejected.`,
+        type: "success",
+      },
+    );
   };
 
   const clearFilters = () => {
@@ -161,23 +298,40 @@ export default function AdminReview({
     setYearFilter("all");
   };
 
-  const handleDelete = () => {
+  // -------------------------------------------------------------------------
+  // Delete an entry permanently. Asks Supabase to remove the row, then also
+  // removes it from the local list so the admin sees it disappear instantly.
+  // -------------------------------------------------------------------------
+  const handleDelete = async () => {
     if (!deleteTarget) return;
 
     const entryTitle = deleteTarget.titleOfActivities;
 
-    onDeleteEntry?.(deleteTarget.id);
-    onShowToast?.({
-      title: "Entry deleted",
-      description: `${entryTitle} was removed successfully.`,
-      type: "success",
-    });
+    try {
+      // Delete from Supabase first
+      await entriesService.delete(deleteTarget.id);
 
-    if (selectedEntry?.id === deleteTarget.id) {
-      setSelectedEntry(null);
+      // Then remove it from the local list
+      onDeleteEntry?.(deleteTarget.id);
+
+      onShowToast?.({
+        title: "Entry deleted",
+        description: `${entryTitle} was removed successfully.`,
+        type: "success",
+      });
+
+      if (selectedEntry?.id === deleteTarget.id) {
+        setSelectedEntry(null);
+      }
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error("Failed to delete entry from Supabase:", err);
+      onShowToast?.({
+        title: "Could not delete entry",
+        description: err.message || "Please try again.",
+        type: "error",
+      });
     }
-
-    setDeleteTarget(null);
   };
 
   return (
